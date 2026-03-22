@@ -124,6 +124,10 @@ So everything lands **directly under `-dest`**, not in subfolders mirroring the 
 - **No inputs found** 
 	- Confirm files are under `-source` with extensions **`.cue`**, **`.gdi`**, or **`.iso`**.
 
+## Additional
+
+Information on `chdman` is avaiable [here](https://docs.mamedev.org/tools/chdman.html).
+
 ## License
 
 This project is licensed under the **MIT License** — see the [`LICENSE`](LICENSE) file in the repository.
