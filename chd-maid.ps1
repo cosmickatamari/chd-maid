@@ -30,7 +30,7 @@ function Clear-HostSafe {
 }
 
 function Show-Header {
-  Write-Host "=== [ CHD Maid ] ===" -ForegroundColor Green
+  Write-Host "=== [ CHD-Maid ] ===" -ForegroundColor Green
   Write-Host "=== [ Version 2026.3.22 ] ===" -ForegroundColor Yellow
   Write-Host ""
 }
