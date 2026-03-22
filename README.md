@@ -7,23 +7,25 @@
 
 ![help](screenshots/help.jpg)
 
-Terminal window displaying CHD-Maid help output.
+*Terminal window displaying CHD-Maid help output.*
 
 **Typical run**
 
 ![run-beginning.jpg](screenshots/run-beginning.jpg)
 
-Beginning of the process with parameters for source and destination folders already passed. Additional discovery counts, the start command (for copying and reusing) as well as the location of the log file.
+*Beginning of the process with parameters for source and destination folders already passed. Additional discovery counts, the start command (for copying and reusing) as well as the location of the log file.*
 
 **Process example**
 
 ![run-process.jpg](screenshots/run-process.jpg)
 
-Output from converting a bin/iso image to chd.
+*Output from converting a bin/iso image to chd.*
 
 **Process complete**
+
 ( upload image )
-Ending completion summary
+
+*Ending completion summary*
 
 ## System requirements
 | Requirement | Notes |
@@ -36,7 +38,7 @@ Ending completion summary
 
 ```powershell
 cd D:\path\to\chdmaid
-pwsh -File .\chd-maid.ps1 -source "D:\rips" -dest "D:\chd-out" -no
+.\chd-maid.ps1 -source "D:\rips" -dest "D:\chd-out" -no
 ```
 
 If you omit `-source` or `-dest`, the script **prompts** for each; pressing Enter uses the **current directory** as the default for that prompt.
@@ -102,17 +104,10 @@ So everything lands **directly under `-dest`**, not in subfolders mirroring the 
 6. **On success with `-yes`** - Deletes the primary source file; for `.cue`, also deletes **referenced** bin files that were found on disk.
 7. **Completion summary** provides:
 	- Elapsed time
-	- Counts for: 
-	-- CHDs created
-    -- CHDs skipped (valid)
-    -- CHDs failed during creation
-
-### Exit codes
-
-| Code | Meaning |
-|------|---------|
-| `0` | No failures (may have skips). Also used when **no** `.cue`/`.gdi`/`.iso` files are found (warning only). |
-| `1` | At least one failure, **or** PowerShell version too old, **or** missing `chdman.exe`, **or** fatal script error. |
+	- Counts for:
+		- CHDs created
+    	- CHDs skipped (valid)
+    	- CHDs failed during creation
 
 ### Log file contents
 
