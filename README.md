@@ -4,15 +4,21 @@
 `CHD-Maid` ia a PowerShell wrapper (running as a subprocess) that scans the defined source folder for disc images (`.cue`, `.gdi`, `.iso`) and converts them to **MAME CHD** format using **chdman** (`createcd` + `verify`). It shows per-file progress, progress time, writes a UTF-8 log, and optionally removes source files after a successful create and verify.
 
 **Help (`-help`)**
+
 ![help](screenshots/help.jpg)
+
 Terminal window displaying CHD-Maid help output.
 
 **Typical run**
-![run-beginning.jpg](.\screenshots\run-beginning.jpg)
+
+![run-beginning.jpg](screenshots/run-beginning.jpg)
+
 Beginning of the process with parameters for source and destination folders already passed. Additional discovery counts, the start command (for copying and reusing) as well as the location of the log file.
 
 **Process example**
-![run-process.jpg](.\screenshots\run-process.jpg)
+
+![run-process.jpg](screenshots/run-process.jpg)
+
 Output from converting a bin/iso image to chd.
 
 **Process complete**
