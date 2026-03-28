@@ -51,9 +51,9 @@ If you omit `-source` or `-dest`, the script **prompts** for each; pressing Ente
 ## Parameters and flags
 | Parameter / flag | Type | Description |
 |------------------|------|-------------|
-| `-source` | `string` | Root folder to **recursively** scan for disc images and archives. If omitted, you are prompted for a value. |
-| `-dest` | `string` | Folder where **`.chd` files will be written** (created if missing). Output CHDs always sit **at the top level of `-dest`**. |
-| `-SevenZipPath` | `string` | Optional path to **`7z.exe`** or its parent folder. Aliases: **`-Path7z`**, **`-zpath`**. |
+| `-source` | string | Root folder to **recursively** scan for disc images and archives. If omitted, you are prompted for a value. |
+| `-dest` | string | Folder where **`.chd` files will be written** (created if missing). Output CHDs always sit **at the top level of `-dest`**. |
+| `-SevenZipPath` | string | Optional path to **`7z.exe`** or its parent folder. Aliases: **`-Path7z`**, **`-zpath`**. |
 | `-yes` | switch | After a successful **create** and **verify**, **delete** sources: primary image, **`.cue`** referenced bins, **`.gdi`** referenced data files, **per-game folders** when safe, and—when applicable—the **archive file** and **unpack folder** behavior documented in **`-help`**. **Mutually exclusive** with `-no`. |
 | `-no` | switch | **Do not** delete original **loose** sources that live outside an archive unpack tree (default when neither flag is passed). **Unpack folders** for archives are still removed after a successful pass; **`-no`** keeps the **archive file** on disk. |
 | `-nolog` | switch | **No log file** for a **fully successful** run. On the first conversion failure, a log may still be created with failure details. |
