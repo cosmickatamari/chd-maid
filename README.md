@@ -27,9 +27,9 @@ Output from converting a bin/iso image to chd.
 
 **Process complete**
 
-( upload image )
+![process-complete.jpg](screenshots/process-complete.jpg)
 
-Ending completion summary
+Sample ending completion summary
 
 ## System requirements
 | Requirement | Notes |
