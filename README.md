@@ -8,19 +8,27 @@
 `CHD-Maid` is a PowerShell script that **recursively** scans a **`-source`** tree for disc images (`.cue`, `.gdi`, `.iso`) **and** common archives (`.zip`, `.7z`, `.rar`). Archives are **extracted under `-source`** with **7-Zip** (not under `-dest`); then each disc job runs **`chdman createcd`** and **`chdman verify`** so every new CHD is verified. The script prints **elapsed time** and **per-step progress** (including 7-Zip extract), writes a **UTF-8 log** under **`logs\`**, and at the end shows a **completion summary** (counts, optional size lines, archives extracted). With **`-yes`**, it can **delete** source material after success—including **`.gdi`** track files, **`.cue`** bins, **whole per-game folders** when appropriate, and **archive files** or **extract folders** according to the rules described in **`-help`**.
 
 **Help (`-help`)**
+
 ![help](screenshots/help.jpg)
+
 Terminal window displaying CHD-Maid help output.
 
 **Typical run**
-![run-beginning.jpg](.\screenshots\run-beginning.jpg)
+
+![run-beginning.jpg](screenshots/run-beginning.jpg)
+
 Beginning of the process with parameters for source and destination folders already passed. Additional discovery counts, the start command (for copying and reusing) as well as the location of the log file.
 
 **Process example**
-![run-process.jpg](.\screenshots\run-process.jpg)
+
+![run-process.jpg](screenshots/run-process.jpg)
+
 Output from converting a bin/iso image to chd.
 
 **Process complete**
+
 ( upload image )
+
 Ending completion summary
 
 ## System requirements
