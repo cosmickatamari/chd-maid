@@ -1,5 +1,5 @@
 # CHD-Maid
-![MIT](https://img.shields.io/badge/License-MIT-purple)
+![License](https://img.shields.io/badge/GPL-3.0-purple)
 ![Release](https://img.shields.io/badge/Release-03-purple)
 ![PowerShell](https://img.shields.io/badge/PowerShell-7.6-blue) 
 ![7-Zip](https://img.shields.io/badge/7Zip-26.00-blue)
