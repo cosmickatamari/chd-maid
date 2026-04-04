@@ -7,6 +7,7 @@ param(
   [switch]$yes,
   [switch]$no,
   [switch]$nolog,
+  [switch]$ignore,
   [switch]$help
 )
 
@@ -41,7 +42,7 @@ function Clear-HostSafe {
 
 function Show-Header {
   Write-Host "=== [ CHD-Maid ] ===" -ForegroundColor Green
-  Write-Host "=== [ Version 2026.3.27 ] ===" -ForegroundColor Yellow
+  Write-Host "=== [ Version 2026.4.3 ] ===" -ForegroundColor Yellow
   Write-Host ""
 }
 
@@ -105,16 +106,41 @@ function Get-DoubleQuotedPath {
 }
 
 # Completion summary: e.g. 0.54 GB (556.39 MB); 1024-based (GiB/MiB) for consistency with Windows binary prefixes.
-# The N2 format is culture-aware (e.g. en-US uses comma as thousands separator when the value is >= 1000).
+# Force en-US so thousands separators always match US rules (e.g. 4,200.50 MB).
 function Format-DataSizeGbMb {
   param([long]$Bytes)
   $negative = $Bytes -lt 0
   $abs = if ($negative) { [long][math]::Abs([double]$Bytes) } else { $Bytes }
   $gb = [double]$abs / [math]::Pow(1024, 3)
   $mb = [double]$abs / [math]::Pow(1024, 2)
-  $out = ('{0:N2} GB ({1:N2} MB)' -f $gb, $mb)
+  $c = [cultureinfo]::GetCultureInfo('en-US')
+  $out = [string]::Format($c, '{0:N2} GB ({1:N2} MB)', $gb, $mb)
   if ($negative) { return '-' + $out }
   return $out
+}
+
+function Format-UsInt32 {
+  param([int]$Value)
+  return $Value.ToString('N0', [cultureinfo]::GetCultureInfo('en-US'))
+}
+
+function Add-ChdmaidPerFileLogLine {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
+    [string]$Line
+  )
+  if ($null -ne $script:chdmaidPerFileLogLines) {
+    [void]$script:chdmaidPerFileLogLines.Add($Line)
+  }
+}
+
+function Complete-ChdmaidPerFileLog {
+  param([Parameter(Mandatory = $true)][bool]$Persist)
+  if (-not $Persist) { return }
+  if ($null -eq $script:chdmaidPerFileLogLines -or $script:chdmaidPerFileLogLines.Count -eq 0) { return }
+  Add-Content -LiteralPath $logPath -Encoding utf8 -Value $script:chdmaidPerFileLogLines.ToArray()
+  Add-Content -LiteralPath $logPath -Encoding utf8 -Value ''
 }
 
 # Remove the unpack tree for this archive pass before any sibling source item runs (finally in Expand-OneArchiveAndVisit). The archive file on disk is removed only with -yes ($deleteSources). Nested archives must be gone; with -yes, no disc images may remain (sources were deleted); with -no, disc files may still exist until this deletes the whole tree.
@@ -168,15 +194,20 @@ function Remove-ArchiveExtractionIfReady {
     }
     return
   }
-  $stillArchives = @(Get-ChildItem -LiteralPath $dirNorm -Recurse -File -ErrorAction SilentlyContinue |
-      Where-Object { Test-IsArchiveFileName -FileName $_.Name })
-  if ($stillArchives.Count -gt 0) { return }
-  # With -yes, sources are removed as we go; insist no disc image files remain (unprocessed work). With -no, cues/isos are kept until the whole unpack tree is deleted here.
-  if ($deleteSources) {
-    $stillDiscs = @(Get-ChildItem -LiteralPath $dirNorm -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { Test-IsDiscInputFileName -FileName $_.Name })
-    if ($stillDiscs.Count -gt 0) { return }
+  $foundArchiveLeft = $false
+  $foundDiscLeft = $false
+  foreach ($leaf in Get-ChildItem -LiteralPath $dirNorm -Recurse -File -ErrorAction SilentlyContinue) {
+    $nm = $leaf.Name
+    if (Test-IsArchiveFileName -FileName $nm) {
+      $foundArchiveLeft = $true
+      break
+    }
+    if ($deleteSources -and (Test-IsDiscInputFileName -FileName $nm)) {
+      $foundDiscLeft = $true
+    }
   }
+  if ($foundArchiveLeft) { return }
+  if ($deleteSources -and $foundDiscLeft) { return }
   Write-Host "Removing extract folder: " -NoNewline -ForegroundColor DarkCyan
   Write-Host $dirNorm -ForegroundColor DarkGray
   try {
@@ -197,7 +228,9 @@ function Remove-ArchiveExtractionIfReady {
 
 function Remove-CompletedArchiveExtractions {
   param(
-    [Parameter(Mandatory = $true)][object[]]$ExtractRecords,
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
+    [object[]]$ExtractRecords,
     [Parameter(Mandatory = $true)][hashtable]$InputOutcome,
     [Parameter(Mandatory = $true)][string[]]$AllInputPaths
   )
@@ -258,7 +291,8 @@ function Show-Help {
   Write-MessageWithFlags "  - If that folder name already exists under `-source`, `<name> (2)`, `(3)`, ... is used."
   Write-Info "    -- When disc jobs under an archive's unpack folder all finish without failure, that extracted folder is removed before the next source item."
   Write-MessageWithFlags "    -- `-yes` also deletes the archive file; `-no` keeps the archive file."
-  Write-MessageWithFlags "  - Output `.chd` files are always written to the top level of `-dest` (e.g. `-dest\GameName.chd`)."
+  Write-MessageWithFlags "    -- If neither `-no` or `-yes` are passed, `-no` is assumed."
+  Write-MessageWithFlags "  - Output `.chd` files are always written to the top level of `-dest` (e.g. `-dest\ImageName.chd`)."
   Write-Host ""
 
   Write-Host "Source & Destination:" -ForegroundColor DarkYellow
@@ -267,12 +301,16 @@ function Show-Help {
   Write-MessageWithFlags "  `-dest` is created if it does not exist."
   Write-Host "   -- You can type a new folder at the prompt."
   Write-Info "  - Pressing <Enter> uses the current directory."
+  Write-Info "  - If you omit both `-yes` and `-ignore`, you are prompted whether existing destination `.chd` files should be [I]gnored or [R]escanned."
+  Write-Info "   -- Enter chooses Rescan (verify / replace if bad)."
   Write-Host ""
 
   Write-Host "Logging:" -ForegroundColor DarkYellow
   Write-Info "  - Default log: `logs\log-chd-maid-YYYY-MM-dd-HHmmss.log` under the current directory (UTF-8 formatted)."
   Write-Info "    -- `logs` subdirectory is created if missing."
-  Write-Info "  - The completion summary is always appended when any job failed."
+  Write-Info "  - The completion summary is appended to the log when logging is enabled or any job failed."
+  Write-Info "    -- The console completion summary ends with the log file path when a log exists (easier to find after long runs)."
+  Write-Info "    -- While logging is enabled (or on failure), each disc job is written as one block of lines after that job finishes."
   Write-MessageWithFlags "  `-nolog` no log file is generated for a fully successful run."
   Write-Info "   -- On the first conversion failure, a log file is created with a short header with FAIL details. "
   Write-Host ""
@@ -281,6 +319,10 @@ function Show-Help {
   Write-MessageWithFlags "  -source <path>        Root folder to scan recursively for archives and for `.cue` / `.gdi` / `.iso`."
   Write-MessageWithFlags "  -dest <path>          Output root for `.chd` only (archives unpack under `-source`)."
   Write-MessageWithFlags "  -SevenZipPath <path>  Optional `7z.exe` or its parent folder. Aliases: `-Path7z`, `-zpath`."
+  Write-MessageWithFlags "  `-ignore`               Skip when the matching `.chd` already exists under `-dest` (no verify)."
+  Write-MessageWithFlags "   -- For archives, using the archive base name (e.g. `ImageName.7z` expects `ImageName.chd`)."
+  Write-MessageWithFlags "   -- Same as choosing [I] at the Ignore/Rescan prompt when you do not pass `-yes`."
+  Write-MessageWithFlags "   -- Using `-ignore` implies keeping sources: not allowed with `-yes`."
   Write-Host ""
 
   Write-Host "Examples:" -ForegroundColor DarkYellow
@@ -288,6 +330,7 @@ function Show-Help {
   Write-MessageWithFlags "  .\chd-maid.ps1 -source `"D:\input`" -dest `"D:\output`" -yes"
   Write-MessageWithFlags "  .\chd-maid.ps1 -source `"D:\input`" -dest `"D:\output`" -no"
   Write-MessageWithFlags "  .\chd-maid.ps1 -source `"D:\input`" -dest `"D:\output`" -no -nolog"
+  Write-MessageWithFlags "  .\chd-maid.ps1 -source `"D:\input`" -dest `"D:\output`" -no -ignore"
   Write-Host ""
 }
 
@@ -319,6 +362,10 @@ Show-Header
 
 if ($yes -and $no) {
   throw "Use can only use one -yes (delete source) or -no (do not delete source)."
+}
+
+if ($ignore -and $yes) {
+  Write-Fail '-ignore cannot be used with -yes. Use -ignore with -no to keep all original sources and archives intact.'
 }
 
 $writeFullLog = -not $nolog
@@ -587,14 +634,6 @@ if (Test-Path -LiteralPath $dest) {
   }
 }
 
-$hasSourceArchives = $false
-foreach ($f in Get-ChildItem -LiteralPath $source -Recurse -File -ErrorAction SilentlyContinue) {
-  if (Test-IsArchiveFileName -FileName $f.Name) {
-    $hasSourceArchives = $true
-    break
-  }
-}
-
 function Get-CueReferencedBins {
   param(
     [Parameter(Mandatory = $true)]
@@ -719,6 +758,16 @@ function Get-TotalNonArchiveFileBytesUnderDirectory {
   return $sum
 }
 
+function Update-ChdmaidExtractDirRootsOrder {
+  if ($null -eq $script:chdmaidExtractDirRoots -or $script:chdmaidExtractDirRoots.Count -le 1) { return }
+  $script:chdmaidExtractDirRoots.Sort({
+      param([string]$a, [string]$b)
+      $d = $b.Length - $a.Length
+      if ($d -ne 0) { return $d }
+      return [string]::Compare($a, $b, [StringComparison]::OrdinalIgnoreCase)
+    })
+}
+
 function Test-ChdmaidInputUnderKnownExtractDir {
   param([Parameter(Mandatory = $true)][string]$LiteralPath)
   if ($null -eq $script:chdmaidExtractDirRoots -or $script:chdmaidExtractDirRoots.Count -eq 0) {
@@ -730,7 +779,7 @@ function Test-ChdmaidInputUnderKnownExtractDir {
     return $false
   }
   $sep = [IO.Path]::DirectorySeparatorChar
-  foreach ($root in ($script:chdmaidExtractDirRoots | Sort-Object { $_.Length } -Descending)) {
+  foreach ($root in $script:chdmaidExtractDirRoots) {
     $r = $root.TrimEnd('\').TrimEnd('/')
     if ($norm.Equals($r, [StringComparison]::OrdinalIgnoreCase) -or
         $norm.StartsWith($r + $sep, [StringComparison]::OrdinalIgnoreCase)) {
@@ -761,43 +810,6 @@ function Get-ChdmaidLongestExtractRootForPath {
   return [IO.Path]::GetFullPath($best)
 }
 
-# Adds to bytesOriginalAttributedSuccess once per extract root / loose folder / root disc (archive file size per extract; same basis as completion "Original size") for successful conversions only — drives Space saved vs New CHD size.
-function Add-ChdmaidSuccessOriginalAttributionForNet {
-  param([Parameter(Mandatory = $true)][string]$LiteralPath)
-  $extRoot = Get-ChdmaidLongestExtractRootForPath -LiteralPath $LiteralPath
-  if ($null -ne $extRoot) {
-    if ($script:chdmaidExtractRootUsedForNetSave.ContainsKey($extRoot)) { return }
-    $script:chdmaidExtractRootUsedForNetSave[$extRoot] = $true
-    if ($script:chdmaidArchiveExtractPayloadByDir.ContainsKey($extRoot)) {
-      $script:bytesOriginalAttributedSuccess += [long]$script:chdmaidArchiveExtractPayloadByDir[$extRoot]
-    }
-    return
-  }
-  try {
-    $srcN = [IO.Path]::GetFullPath($source).TrimEnd([char[]]@('\', '/'))
-    $par = [IO.Path]::GetFullPath((Split-Path -Parent $LiteralPath))
-  } catch {
-    return
-  }
-  $sep = [IO.Path]::DirectorySeparatorChar
-  if ($par.Equals($srcN, [StringComparison]::OrdinalIgnoreCase)) {
-    if ($script:chdmaidLooseRootNetDone.ContainsKey($LiteralPath)) { return }
-    $script:chdmaidLooseRootNetDone[$LiteralPath] = $true
-    $extL = [IO.Path]::GetExtension($LiteralPath).ToLowerInvariant()
-    $script:bytesOriginalAttributedSuccess += Get-DiscImageFootprintBytes -LiteralPath $LiteralPath -ExtLower $extL
-    return
-  }
-  if (-not ($par.StartsWith($srcN + $sep, [StringComparison]::OrdinalIgnoreCase))) { return }
-  if ($script:chdmaidLooseFolderNetDone.ContainsKey($par)) { return }
-  $script:chdmaidLooseFolderNetDone[$par] = $true
-  if ($script:chdmaidLooseFolderPayloadByDir.ContainsKey($par)) {
-    $script:bytesOriginalAttributedSuccess += [long]$script:chdmaidLooseFolderPayloadByDir[$par]
-  }
-  elseif (Test-Path -LiteralPath $par -PathType Container) {
-    $script:bytesOriginalAttributedSuccess += Get-TotalNonArchiveFileBytesUnderDirectory -LiteralPath $par
-  }
-}
-
 # Record on-disk source material for loose paths (not under archive extract dirs): full game folder once, or disc footprint when the image lives directly under -source.
 function Register-ChdmaidLooseFolderOriginalPayload {
   param([Parameter(Mandatory = $true)][string]$LiteralPath)
@@ -823,9 +835,28 @@ function Register-ChdmaidLooseFolderOriginalPayload {
 }
 
 $deleteText = $(if ($deleteSources) { 'Yes (-yes)' } else { 'No' })
-# Align value column (longest label is "Delete sources:")
-$labelPadWidth = 'Delete sources:'.Length
+# Align value column (widen for longest status label)
+$labelPadWidth = [Math]::Max([Math]::Max('Source:'.Length, 'Destination:'.Length), [Math]::Max('Delete sources:'.Length, 'Ignore sources:'.Length))
 
+$script:chdmaidIgnoreExistingDest = [bool]$ignore
+if (
+  (-not $PSBoundParameters.ContainsKey('ignore') -and -not $PSBoundParameters.ContainsKey('yes')) -and
+  (@($existingChdsInDest).Count -gt 0)
+) {
+  Write-Host '.chd files already exist under the destination folder:' -ForegroundColor DarkYellow
+  Write-Host '  [I] Ignore  - Do not verify these files, (same as -ignore).' -ForegroundColor White
+  Write-Host '  [R] Rescan  - Verify the existing .chd; delete and recreate if invalid.' -ForegroundColor White
+  $choice = Read-Host 'Choice [I/R] (Enter = Rescan)'
+  $t = if ($null -eq $choice) { '' } else { $choice.Trim() }
+  if ($t.Length -gt 0 -and ($t.Substring(0, 1) -ieq 'i')) {
+    $script:chdmaidIgnoreExistingDest = $true
+  } else {
+    $script:chdmaidIgnoreExistingDest = $false
+  }
+  Write-Host ""
+}
+
+$ignoreSourcesText = if ($script:chdmaidIgnoreExistingDest) { 'Yes (-ignore)' } else { 'No (rescan)' }
 Write-Host ("{0,-$labelPadWidth}" -f 'Source:') -NoNewline -ForegroundColor DarkCyan
 Write-Host (' ' + $source) -ForegroundColor White
 
@@ -834,18 +865,28 @@ Write-Host (' ' + $dest) -ForegroundColor White
 
 Write-Host ("{0,-$labelPadWidth}" -f 'Delete sources:') -NoNewline -ForegroundColor DarkCyan
 Write-Host (' ' + $deleteText) -ForegroundColor White
+
+Write-Host ("{0,-$labelPadWidth}" -f 'Ignore sources:') -NoNewline -ForegroundColor DarkCyan
+Write-Host (' ' + $ignoreSourcesText) -ForegroundColor White
 Write-Host ""
 
-# Before archives are extracted: only loose .cue/.gdi/.iso on disk count; contents of .zip/.7z/.rar are unknown.
+# One recurse over -source: count archives, collect loose .cue/.gdi/.iso (archive contents not listed until extract).
 $inputsPre = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
 $inputSeenPre = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($pat in @('*.cue', '*.gdi', '*.iso')) {
-  foreach ($f in @(Get-ChildItem -LiteralPath $source -Recurse -File -Filter $pat -ErrorAction SilentlyContinue)) {
+[int]$sourceArchiveCount = 0
+foreach ($f in Get-ChildItem -LiteralPath $source -Recurse -File -ErrorAction SilentlyContinue) {
+  $leafName = $f.Name
+  if (Test-IsArchiveFileName -FileName $leafName) {
+    $sourceArchiveCount++
+    continue
+  }
+  if (Test-IsDiscInputFileName -FileName $leafName) {
     if ($inputSeenPre.Add($f.FullName)) {
       $inputsPre.Add($f) | Out-Null
     }
   }
 }
+$hasSourceArchives = ($sourceArchiveCount -gt 0)
 $inputsPre = @($inputsPre | Sort-Object FullName)
 if ($inputsPre -isnot [System.Array]) {
   $inputsPre = @($inputsPre)
@@ -860,10 +901,12 @@ $flags = @()
 if ($yes) { $flags += '-yes' }
 elseif ($no) { $flags += '-no' }
 if ($nolog) { $flags += '-nolog' }
+if ($script:chdmaidIgnoreExistingDest) { $flags += '-ignore' }
 $quickCmd = '.\chd-maid.ps1 -source ' + (Get-DoubleQuotedPath $source) + ' -dest ' + (Get-DoubleQuotedPath $dest) + ' ' + ($flags -join ' ')
 if ($PSBoundParameters.ContainsKey('SevenZipPath') -and -not [string]::IsNullOrWhiteSpace($SevenZipPath)) {
   $quickCmd += ' -SevenZipPath ' + (Get-DoubleQuotedPath $SevenZipPath)
 }
+$quickCmdLine = $quickCmd.Trim()
 
 # Log files under .\logs\ from the current directory (folder created if missing)
 $logsDir = Join-Path (Get-Location).Path 'logs'
@@ -892,10 +935,6 @@ function Initialize-ChdMaidErrorOnlyLog {
   ) | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
-$sourceArchiveCount = @(
-  Get-ChildItem -LiteralPath $source -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object { Test-IsArchiveFileName -FileName $_.Name }
-).Count
 # Pre-extraction headline: loose .cue/.gdi/.iso on disk, plus one nominal slot per archive (contents are not listed until after 7-Zip).
 $displayCompatCount = if ($sourceArchiveCount -gt 0) { @($inputsPre).Count + $sourceArchiveCount } else { @($inputsPre).Count }
 $lineFoundCompat = "Found $displayCompatCount compatible file(s) in the source folder"
@@ -908,6 +947,10 @@ if ($sourceArchiveCount -gt 0) {
 } else {
   $lineFoundCompat += '.'
 }
+
+Write-Host "Start Command: " -NoNewline -ForegroundColor Yellow
+Write-Host $quickCmdLine -ForegroundColor DarkGray
+Write-Host ""
 
 Write-Host "Found " -NoNewline -ForegroundColor White
 Write-Host $displayCompatCount -NoNewline -ForegroundColor Green
@@ -930,18 +973,6 @@ Write-Host "Found " -NoNewline -ForegroundColor White
 Write-Host @($existingChdsInDest).Count -NoNewline -ForegroundColor Green
 Write-Host " existing .chd file(s) under destination.`n" -ForegroundColor White
 
-Write-Host "Start Command: " -NoNewline -ForegroundColor Yellow
-Write-Host $quickCmd.Trim() -ForegroundColor DarkGray
-
-Write-Host "Log file: " -NoNewline -ForegroundColor Yellow
-if ($writeFullLog) {
-  Write-Host $logPath -ForegroundColor DarkGray
-} else {
-  Write-Host "(none unless an error occurs)" -ForegroundColor DarkGray
-}
-Write-Host "`n"
-
-$quickCmdLine = $quickCmd.Trim()
 if ($writeFullLog) {
   @(
     $quickCmdLine
@@ -974,6 +1005,7 @@ function Remove-ChdMaidSourceMediaIfYes {
     if (Test-Path -LiteralPath $p -PathType Leaf) {
       Write-Host "Deleting source: " -NoNewline -ForegroundColor White
       Write-Host $p -ForegroundColor DarkGray
+      Add-ChdmaidPerFileLogLine -Line ('Deleting source: ' + $p)
       Remove-Item -LiteralPath $p -Force -ErrorAction Stop
     }
   }
@@ -1000,6 +1032,7 @@ function Remove-ChdMaidSourceMediaIfYes {
     if ($blocking.Count -eq 0) {
       Write-Host "Removing game folder: " -NoNewline -ForegroundColor DarkCyan
       Write-Host $par -ForegroundColor DarkGray
+      Add-ChdmaidPerFileLogLine -Line ('Removing game folder: ' + $par)
       $script:chdmaidSectionSeparatorBeforeNextItem = $true
       Remove-Item -LiteralPath $par -Recurse -Force -ErrorAction Stop
       return
@@ -1028,6 +1061,7 @@ function Remove-ChdMaidSourceMediaIfYes {
     if ($items.Count -ne 0) { continue }
     Write-Host "Removing empty folder: " -NoNewline -ForegroundColor DarkCyan
     Write-Host $d -ForegroundColor DarkGray
+    Add-ChdmaidPerFileLogLine -Line ('Removing empty folder: ' + $d)
     Remove-Item -LiteralPath $d -Force -ErrorAction Stop
   }
 }
@@ -1036,50 +1070,104 @@ function Invoke-ChdMaidSingleDiscInput {
   param(
     [Parameter(Mandatory = $true)][System.IO.FileInfo]$Item
   )
-  # Blank line only between separate "work units" (e.g. after removing a game folder or finishing an archive pass), not between extract progress and the first .cue in that extract, nor between multi-disc cues in the same folder.
-  if ($script:chdmaidPostExtractWalkDepth -eq 0 -and $script:chdmaidSectionSeparatorBeforeNextItem) {
-    Write-Host ''
-    $script:chdmaidSectionSeparatorBeforeNextItem = $false
-  }
-  $inputPath = $Item.FullName
-  $ext = $Item.Extension.ToLowerInvariant()
-  $baseName = [IO.Path]::GetFileNameWithoutExtension($inputPath)
-  $outPath = Join-Path $dest ($baseName + ".chd")
+  [string]$curParent = $null
   try {
+    # Blank line after archive / folder-removal at source walk depth, and between disc jobs in different folders (not multi-disc .cue sets in the same folder).
+    [bool]$printedLeadingBlank = $false
+    if ($script:chdmaidPostExtractWalkDepth -eq 0 -and $script:chdmaidSectionSeparatorBeforeNextItem) {
+      Write-Host ''
+      $script:chdmaidSectionSeparatorBeforeNextItem = $false
+      $printedLeadingBlank = $true
+    }
+    try {
+      $curParent = [IO.Path]::GetFullPath((Split-Path -Parent $Item.FullName))
+    } catch {
+      $curParent = $null
+    }
+
+    $script:chdmaidPerFileLogLines = [System.Collections.Generic.List[string]]::new()
+    $script:chdmaidDiscJobIndex++
+    if ($script:chdmaidDiscJobIndex -gt 1) {
+      $parentChanged = $true
+      if ($null -ne $curParent -and $null -ne $script:chdmaidPrevDiscInputParent) {
+        $parentChanged = -not $curParent.Equals($script:chdmaidPrevDiscInputParent, [StringComparison]::OrdinalIgnoreCase)
+      }
+      if ($parentChanged -and -not $printedLeadingBlank) {
+        Write-Host ''
+      }
+    }
+    if ($script:chdmaidDiscJobIndex -gt $script:chdmaidDiscJobTotal) {
+      $script:chdmaidDiscJobTotal = $script:chdmaidDiscJobIndex
+    }
+    if ($script:chdmaidDiscJobTotal -gt 0) {
+      $pCur = Format-UsInt32 -Value $script:chdmaidDiscJobIndex
+      $pTot = Format-UsInt32 -Value $script:chdmaidDiscJobTotal
+      $progLine = ('===[ {0}/{1} ]===' -f $pCur, $pTot)
+      Write-Host '===[ ' -NoNewline -ForegroundColor DarkCyan
+      Write-Host $pCur -NoNewline -ForegroundColor Green
+      Write-Host '/' -NoNewline -ForegroundColor DarkCyan
+      Write-Host $pTot -NoNewline -ForegroundColor Green
+      Write-Host ' ]===' -ForegroundColor DarkCyan
+      Add-ChdmaidPerFileLogLine -Line $progLine
+    }
+    $inputPath = $Item.FullName
+    $ext = $Item.Extension.ToLowerInvariant()
+    $baseName = [IO.Path]::GetFileNameWithoutExtension($inputPath)
+    $outPath = Join-Path $dest ($baseName + ".chd")
+    try {
+    $recreateAfterRemovingBadChd = $false
+    if ($script:chdmaidIgnoreExistingDest -and (Test-Path -LiteralPath $outPath -PathType Leaf)) {
+      Write-Host "Ignoring (destination CHD exists): " -NoNewline -ForegroundColor DarkCyan
+      Write-Host $outPath -ForegroundColor DarkGray
+      Write-Host "  Source: " -NoNewline -ForegroundColor DarkCyan
+      Write-Host $inputPath -ForegroundColor DarkGray
+      if ($script:chdmaidDiscJobTotal -gt 0) {
+        Add-ChdmaidPerFileLogLine -Line ('===[ {0}/{1} ]===' -f (Format-UsInt32 -Value $script:chdmaidDiscJobIndex), (Format-UsInt32 -Value $script:chdmaidDiscJobTotal))
+      }
+      Add-ChdmaidPerFileLogLine -Line ("IGNORING (destination CHD exists)    {0}" -f $outPath)
+      Add-ChdmaidPerFileLogLine -Line $inputPath
+      $script:inputOutcome[$inputPath] = 'skipped'
+      $script:chdmaidDiscSkippedIgnore++
+      Register-ChdmaidLooseFolderOriginalPayload -LiteralPath $inputPath
+      Remove-ChdMaidSourceMediaIfYes -InputPath $inputPath -ExtLower $ext
+      Complete-ChdmaidPerFileLog -Persist $writeFullLog
+      return
+    }
     if (Test-Path -LiteralPath $outPath) {
       $fileNameChd = [IO.Path]::GetFileName($outPath)
       $verifyExistingStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
       $verifyExistingResult = Invoke-ProcessWithStatus -ExePath $chdmanExe -Arguments @('verify', '-i', $outPath) -Label 'Verifying' -FileName $fileNameChd -Stopwatch $verifyExistingStopwatch
       Write-Host ""
+      Add-ChdmaidPerFileLogLine -Line ''
       if ($verifyExistingResult.ExitCode -eq 0) {
         Write-Host "Skipping (already existed and valid): " -NoNewline -ForegroundColor DarkCyan
         Write-Host $outPath -ForegroundColor DarkGray
-        if ($writeFullLog) {
-          Add-Content -LiteralPath $logPath -Value $inputPath -Encoding utf8
-          Add-Content -LiteralPath $logPath -Value ("SKIPPED (already existed and valid)    {0}" -f $outPath) -Encoding utf8
-          Add-Content -LiteralPath $logPath -Value '' -Encoding utf8
-        }
+        Add-ChdmaidPerFileLogLine -Line $inputPath
+        Add-ChdmaidPerFileLogLine -Line ("SKIPPED (already existed and valid)    {0}" -f $outPath)
         $script:inputOutcome[$inputPath] = 'skipped'
         $script:skipped++
         Register-ChdmaidLooseFolderOriginalPayload -LiteralPath $inputPath
         Remove-ChdMaidSourceMediaIfYes -InputPath $inputPath -ExtLower $ext
+        Complete-ChdmaidPerFileLog -Persist $writeFullLog
         return
       }
       Write-Host "Existing CHD failed verify; removing defective file: " -NoNewline -ForegroundColor Red
       Write-Host $outPath -ForegroundColor DarkGray
+      Add-ChdmaidPerFileLogLine -Line ('Existing CHD failed verify; removing defective file: ' + $outPath)
       if (Test-Path -LiteralPath $outPath) {
         Remove-Item -LiteralPath $outPath -Force -ErrorAction Stop
       }
-      if ($writeFullLog) {
-        Add-Content -LiteralPath $logPath -Value ("REMOVED (failed verify)    {0}" -f $outPath) -Encoding utf8
-      }
+      Add-ChdmaidPerFileLogLine -Line ("REMOVED (failed verify)    {0}" -f $outPath)
+      $recreateAfterRemovingBadChd = $true
     }
 
     Write-Host "Creating CHD from: " -NoNewline -ForegroundColor White
     Write-Host $inputPath -ForegroundColor DarkGray
+    Add-ChdmaidPerFileLogLine -Line ("Creating CHD from: " + $inputPath)
     $fileNameOnly = [IO.Path]::GetFileName($inputPath)
     $createResult = Invoke-ProcessWithStatus -ExePath $chdmanExe -Arguments @('createcd','-i',$inputPath,'-o',$outPath) -Label 'Creating' -FileName $fileNameOnly -Stopwatch ([System.Diagnostics.Stopwatch]::StartNew())
     Write-Host ""
+    Add-ChdmaidPerFileLogLine -Line ''
 
     if ($createResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $outPath)) {
       throw "chdman createcd failed."
@@ -1087,10 +1175,12 @@ function Invoke-ChdMaidSingleDiscInput {
 
     $verifyResult = Invoke-ProcessWithStatus -ExePath $chdmanExe -Arguments @('verify','-i',$outPath) -Label 'Verifying' -FileName $fileNameOnly -Stopwatch ([System.Diagnostics.Stopwatch]::StartNew())
     Write-Host ""
+    Add-ChdmaidPerFileLogLine -Line ''
     if ($verifyResult.ExitCode -ne 0) {
       if (Test-Path -LiteralPath $outPath -PathType Leaf) {
         Write-Host "CHD failed verify; removing defective file: " -NoNewline -ForegroundColor Red
         Write-Host $outPath -ForegroundColor DarkGray
+        Add-ChdmaidPerFileLogLine -Line ('CHD failed verify; removing defective file: ' + $outPath)
         Remove-Item -LiteralPath $outPath -Force -ErrorAction Stop
       }
       throw "chdman verify failed after CHD was successfully created."
@@ -1098,24 +1188,25 @@ function Invoke-ChdMaidSingleDiscInput {
 
     Write-Host "Verified: " -NoNewline -ForegroundColor DarkCyan
     Write-Host $outPath -ForegroundColor DarkGray
-    if ($writeFullLog) {
-      Add-Content -LiteralPath $logPath -Value $inputPath -Encoding utf8
-      Add-Content -LiteralPath $logPath -Value ("VERIFIED    {0}" -f $outPath) -Encoding utf8
-      Add-Content -LiteralPath $logPath -Value '' -Encoding utf8
+    Add-ChdmaidPerFileLogLine -Line $inputPath
+    Add-ChdmaidPerFileLogLine -Line ("VERIFIED    {0}" -f $outPath)
+    if ($recreateAfterRemovingBadChd) {
+      $script:chdmaidChdsRecreated++
     }
     $script:inputOutcome[$inputPath] = 'success'
     $script:bytesChdThisRun += [long](Get-Item -LiteralPath $outPath).Length
     $script:success++
     Register-ChdmaidLooseFolderOriginalPayload -LiteralPath $inputPath
-    Add-ChdmaidSuccessOriginalAttributionForNet -LiteralPath $inputPath
 
     Remove-ChdMaidSourceMediaIfYes -InputPath $inputPath -ExtLower $ext
+    Complete-ChdmaidPerFileLog -Persist $writeFullLog
   } catch {
     $script:failed++
     $script:inputOutcome[$inputPath] = 'failed'
     if (Test-Path -LiteralPath $outPath -PathType Leaf) {
       Write-Host "Removing failed or partial CHD output: " -NoNewline -ForegroundColor Red
       Write-Host $outPath -ForegroundColor DarkGray
+      Add-ChdmaidPerFileLogLine -Line ('Removing failed or partial CHD output: ' + $outPath)
       try {
         Remove-Item -LiteralPath $outPath -Force -ErrorAction Stop
       } catch {
@@ -1124,8 +1215,10 @@ function Invoke-ChdMaidSingleDiscInput {
     }
     Write-Host "Failed: " -NoNewline -ForegroundColor Red
     Write-Host $inputPath -ForegroundColor DarkGray
+    Add-ChdmaidPerFileLogLine -Line ('Failed: ' + $inputPath)
     if ($_.Exception -and $_.Exception.Message) {
       Write-Host ("  {0}" -f $_.Exception.Message) -ForegroundColor DarkRed
+      Add-ChdmaidPerFileLogLine -Line ('  ' + $_.Exception.Message)
     }
     $failDetail = if ($_.Exception -and $_.Exception.Message) { $_.Exception.Message } else { 'Unknown error' }
     if (-not $writeFullLog) {
@@ -1136,9 +1229,11 @@ function Invoke-ChdMaidSingleDiscInput {
         Write-Host $logPath -ForegroundColor DarkGray
       }
     }
-    Add-Content -LiteralPath $logPath -Value $inputPath -Encoding utf8
-    Add-Content -LiteralPath $logPath -Value ("FAILED    {0} | {1}" -f $outPath, $failDetail) -Encoding utf8
-    Add-Content -LiteralPath $logPath -Value '' -Encoding utf8
+    Add-ChdmaidPerFileLogLine -Line ("FAILED    {0} | {1}" -f $outPath, $failDetail)
+    Complete-ChdmaidPerFileLog -Persist $true
+  }
+  } finally {
+    $script:chdmaidPrevDiscInputParent = $curParent
   }
 }
 
@@ -1158,6 +1253,34 @@ function Expand-OneArchiveAndVisit {
     throw '7-Zip executable path is missing; archives cannot be extracted.'
   }
   if (-not $DoneArchives.Add($ArchiveFileInfo.FullName)) { return }
+  if ($script:chdmaidIgnoreExistingDest) {
+    $stemIgn = Get-ArchiveStemForFolderName -FileName $ArchiveFileInfo.Name
+    $destChdFromArchiveName = Join-Path $dest ($stemIgn + '.chd')
+    if (Test-Path -LiteralPath $destChdFromArchiveName -PathType Leaf) {
+      if ($script:chdmaidSectionSeparatorBeforeNextItem) {
+        Write-Host ''
+        $script:chdmaidSectionSeparatorBeforeNextItem = $false
+      }
+      Write-Host "Ignoring archive (-ignore; destination CHD exists): " -NoNewline -ForegroundColor DarkCyan
+      Write-Host $ArchiveFileInfo.FullName -ForegroundColor DarkGray
+      Write-Host "  -> " -NoNewline -ForegroundColor DarkCyan
+      Write-Host $destChdFromArchiveName -ForegroundColor DarkGray
+      $script:chdmaidArchivesSkippedIgnore++
+      $script:chdmaidArchiveExtractPayloadByDir[$ArchiveFileInfo.FullName] = [long](Get-Item -LiteralPath $ArchiveFileInfo.FullName -ErrorAction Stop).Length
+      if ($script:chdmaidDiscJobTotal -gt $script:chdmaidDiscJobIndex) {
+        $script:chdmaidDiscJobTotal--
+      }
+      if ($writeFullLog) {
+        Add-Content -LiteralPath $logPath -Encoding utf8 -Value @(
+          "IGNORED (archive; -ignore; CHD in destination)    $($ArchiveFileInfo.FullName)",
+          $destChdFromArchiveName,
+          ''
+        )
+      }
+      $script:chdmaidSectionSeparatorBeforeNextItem = $true
+      return
+    }
+  }
   if ($script:chdmaidSectionSeparatorBeforeNextItem) {
     Write-Host ''
     $script:chdmaidSectionSeparatorBeforeNextItem = $false
@@ -1178,6 +1301,7 @@ function Expand-OneArchiveAndVisit {
     [void]$ArchiveRecords.Add([pscustomobject]@{ ExtractDir = $extractDir; ArchivePath = $ArchiveFileInfo.FullName })
     $extractNorm = [IO.Path]::GetFullPath($extractDir)
     [void]$script:chdmaidExtractDirRoots.Add($extractNorm)
+    Update-ChdmaidExtractDirRootsOrder
     # Original-size stats use the archive file on disk, not the extracted folder tree.
     $script:chdmaidArchiveExtractPayloadByDir[$extractNorm] = [long](Get-Item -LiteralPath $ArchiveFileInfo.FullName -ErrorAction Stop).Length
 
@@ -1246,22 +1370,28 @@ $sourceRootFull = [IO.Path]::GetFullPath($source)
 $success = 0
 $skipped = 0
 $failed = 0
+$script:chdmaidDiscSkippedIgnore = 0
+$script:chdmaidArchivesSkippedIgnore = 0
+$script:chdmaidChdsRecreated = 0
 $script:inputOutcome = @{}
 $script:chdmaidExtractDirRoots = [System.Collections.Generic.List[string]]::new()
 $script:chdmaidArchiveExtractPayloadByDir = @{}
 $script:chdmaidLooseFolderPayloadByDir = @{}
 $script:chdmaidLooseRootDiscPayloadByPath = @{}
-$script:chdmaidExtractRootUsedForNetSave = @{}
-$script:chdmaidLooseFolderNetDone = @{}
-$script:chdmaidLooseRootNetDone = @{}
-$script:bytesOriginalAttributedSuccess = [long]0
 [long]$bytesChdThisRun = 0
 $script:chdmaidSectionSeparatorBeforeNextItem = $false
 $script:chdmaidPostExtractWalkDepth = 0
+$script:chdmaidPrevDiscInputParent = $null
+
+# Progress total matches "Found N compatible file(s)" (loose disc images + one slot per archive). If an archive contains more disc jobs than that nominal count, the total grows while running.
+$script:chdmaidDiscJobTotal = $displayCompatCount
+$script:chdmaidDiscJobIndex = 0
 
 Invoke-ChdMaidSourceDirectory -LiteralDir $sourceRootFull -SourceRootFull $sourceRootFull -SevenZipExe $sevenZipExeResolved -ArchiveRecords $archiveExtractRecords -DoneArchives $doneArchives
 
-if (($success + $skipped + $failed) -eq 0) {
+if (
+  ($success + $skipped + $failed + $script:chdmaidDiscSkippedIgnore + $script:chdmaidArchivesSkippedIgnore) -eq 0
+) {
   if ((@($inputsPre).Count -gt 0) -or $hasSourceArchives) {
     Write-Warn "No .cue/.gdi/.iso jobs were completed under: $source."
   }
@@ -1287,49 +1417,74 @@ foreach ($kv in $script:chdmaidLooseRootDiscPayloadByPath.GetEnumerator()) {
 # Original size: per-archive file on-disk size + each loose game folder once (non-archive files) + loose disc images directly under -source.
 [long]$bytesOriginalHandled = $looseFolderPayloadSum + $looseRootPayloadSum + $archivePayloadSum
 
-# Net bytes: same "original" basis as each successful job (archive file / loose folder / root disc, once each) minus new CHD sizes this run.
-[long]$bytesSavedNet = [long]$script:bytesOriginalAttributedSuccess - $bytesChdThisRun
+# Same basis as "Original size" vs "New CHD size" in the completion summary (positive = CHDs smaller than attributed sources).
+[long]$bytesSavedNet = $bytesOriginalHandled - $bytesChdThisRun
 $archivesExtractedCount = @($archiveExtractRecords).Count
 
-$savedPctVsAttributedText = ''
-[long]$attrSucc = [long]$script:bytesOriginalAttributedSuccess
-if ($attrSucc -gt 0) {
-  $savedPctVsAttributed = 100.0 * [double]$bytesSavedNet / [double]$attrSucc
-  $savedPctVsAttributedText = ('  ({0:N1}% of attributed source size saved)' -f $savedPctVsAttributed)
+$ts = $overallStopwatch.Elapsed
+if ($ts.Days -gt 0) {
+  $dayWord = if ($ts.Days -eq 1) { 'day' } else { 'days' }
+  $timeText = ('{0} {1}, {2:D2}:{3:D2}:{4:D2}' -f $ts.Days, $dayWord, $ts.Hours, $ts.Minutes, $ts.Seconds)
+} else {
+  $timeText = ('{0:D2}:{1:D2}:{2:D2}' -f $ts.Hours, $ts.Minutes, $ts.Seconds)
 }
-
-$timeText = $overallStopwatch.Elapsed.ToString('hh\:mm\:ss')
 $summaryLabelWidth = 38
 $summaryLines = [System.Collections.Generic.List[string]]::new()
 [void]$summaryLines.Add('')
 [void]$summaryLines.Add('===[ Completion Summary ]===')
 [void]$summaryLines.Add(("     " + ('Elapsed time:').PadRight($summaryLabelWidth) + $timeText))
 if ($success -ne 0) {
-  [void]$summaryLines.Add(("     " + ('CHDs created:').PadRight($summaryLabelWidth) + $success))
+  [void]$summaryLines.Add(("     " + ('CHDs created:').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $success)))
+}
+if ($script:chdmaidChdsRecreated -ne 0) {
+  [void]$summaryLines.Add(("     " + ('CHDs recreated:').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $script:chdmaidChdsRecreated)))
 }
 if ($skipped -ne 0) {
-  [void]$summaryLines.Add(("     " + ('CHDs skipped (valid):').PadRight($summaryLabelWidth) + $skipped))
+  [void]$summaryLines.Add(("     " + ('CHDs skipped (verified existing):').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $skipped)))
+}
+if ($script:chdmaidDiscSkippedIgnore -ne 0) {
+  [void]$summaryLines.Add(("     " + ('CHDs skipped (-ignore):').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $script:chdmaidDiscSkippedIgnore)))
+}
+if ($script:chdmaidArchivesSkippedIgnore -ne 0) {
+  [void]$summaryLines.Add(("     " + ('Archives skipped (-ignore):').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $script:chdmaidArchivesSkippedIgnore)))
 }
 if ($failed -ne 0) {
-  [void]$summaryLines.Add(("     " + ('CHDs failed:').PadRight($summaryLabelWidth) + $failed))
+  [void]$summaryLines.Add(("     " + ('CHDs failed:').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $failed)))
 }
 if ($archivesExtractedCount -ne 0) {
-  [void]$summaryLines.Add(("     " + ('Archives extracted:').PadRight($summaryLabelWidth) + $archivesExtractedCount))
+  [void]$summaryLines.Add(("     " + ('Archives extracted:').PadRight($summaryLabelWidth) + (Format-UsInt32 -Value $archivesExtractedCount)))
 }
 if ($bytesOriginalHandled -ne 0) {
   [void]$summaryLines.Add(("     " + ('Original size (processed disc sets):').PadRight($summaryLabelWidth) + (Format-DataSizeGbMb -Bytes $bytesOriginalHandled)))
 }
 if ($bytesChdThisRun -ne 0) {
-  [void]$summaryLines.Add(("     " + ('New CHD size (this run only):').PadRight($summaryLabelWidth) + (Format-DataSizeGbMb -Bytes $bytesChdThisRun) + $savedPctVsAttributedText))
+  [void]$summaryLines.Add(("     " + ('New CHD size (this run only):').PadRight($summaryLabelWidth) + (Format-DataSizeGbMb -Bytes $bytesChdThisRun)))
 }
-if ($bytesSavedNet -ne 0) {
-  [void]$summaryLines.Add(("     " + ('Space saved (new CHDs vs source):').PadRight($summaryLabelWidth) + (Format-DataSizeGbMb -Bytes $bytesSavedNet)))
+if (($bytesOriginalHandled -gt 0) -and ($bytesChdThisRun -gt 0)) {
+  $pctSaved = 100.0 * [double]$bytesSavedNet / [double]$bytesOriginalHandled
+  $cPct = [cultureinfo]::GetCultureInfo('en-US')
+  $pctPart = [string]::Format($cPct, ' - {0:N1}% difference', $pctSaved)
+  [void]$summaryLines.Add(("     " + ('Space saved (new CHDs vs source):').PadRight($summaryLabelWidth) + (Format-DataSizeGbMb -Bytes $bytesSavedNet) + $pctPart))
+}
+$logSummaryLine = $null
+if ($writeFullLog) {
+  $logSummaryLine = ("     " + ('Log file:').PadRight($summaryLabelWidth) + $logPath)
+} elseif (Test-Path -LiteralPath $logPath) {
+  $logSummaryLine = ("     " + ('Log file:').PadRight($summaryLabelWidth) + $logPath)
+}
+if ($null -ne $logSummaryLine) {
+  [void]$summaryLines.Add($logSummaryLine)
 }
 
 Write-Host ""
 Write-Host ""
 foreach ($line in $summaryLines | Select-Object -Skip 1) {
-  Write-Summary $line
+  if ($line -match '^(?<prefix>\s+CHDs failed:\s*)(?<num>[\d,]+)\s*$') {
+    Write-Host $matches.prefix -NoNewline -ForegroundColor DarkCyan
+    Write-Host $matches.num -ForegroundColor DarkRed
+  } else {
+    Write-Summary $line
+  }
 }
 Write-Host ""
 

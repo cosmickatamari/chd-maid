@@ -1,11 +1,11 @@
 # CHD-Maid
 ![License](https://img.shields.io/badge/GPL-3.0-purple)
-![Release](https://img.shields.io/badge/Release-03-purple)
+![Release](https://img.shields.io/badge/Release-04-purple)
 ![PowerShell](https://img.shields.io/badge/PowerShell-7.6-blue) 
 ![7-Zip](https://img.shields.io/badge/7Zip-26.00-blue)
 ![Windows](https://img.shields.io/badge/Windows-11-blue)
 
-`CHD-Maid` is a PowerShell script that **recursively** scans a **`-source`** tree for disc images (`.cue`, `.gdi`, `.iso`) **and** common archives (`.zip`, `.7z`, `.rar`). Archives are **extracted under `-source`** using **7-Zip**; then each image job runs **`chdman -createcd`** followed by **`chdman -verify`,** ensuring all CHDs are verified. The script prints **elapsed time** and **per-step progress** (including 7-Zip extract), writes a **UTF-8 formatted logfile** under the subdirectory **`logs\`**, and at the end shows a **completion summary.**
+`CHD-Maid` is a PowerShell script that **recursively** scans a **`-source`** tree for disc images (`.cue`, `.gdi`, `.iso`) **and** common archives (`.zip`, `.7z`, `.rar`). Archives are **extracted under `-source`** with **7-Zip** (not under `-dest`); then each disc job runs **`chdman createcd`** and **`chdman verify`** so every new CHD is verified (unless **`-ignore`** skips an output that already exists—see below). The script prints **elapsed time**, a **`===[ current/total ]===`** line per disc job, and **per-step progress** (including 7-Zip extract), writes a **UTF-8 log** under **`logs\`**, and at the end shows a **completion summary** (counts, optional size lines, archives extracted). With **`-yes`**, it can **delete** source material after success—including **`.gdi`** track files, **`.cue`** bins, **whole per-game folders** when appropriate, and **archive files** or **extract folders** according to the rules described in **`-help`**.
 
 **Help (`-help`)**
 
@@ -36,8 +36,8 @@ Sample ending completion summary
 |-------------|--------|
 | **PowerShell** | **7.6.0 or newer** (`pwsh`). The script exits early on older versions, redirecting to [Install PowerShell](https://github.com/PowerShell/PowerShell/releases). |
 | **chdman** | **`chdman.exe` must live in the directory you run the script from.** If `chdman.exe` is missing, the script stops with an error. |
-| **7-Zip** | **Required if `-source` contains any `.zip` / `.7z` / `.rar`.** The script looks for `7z.exe` under `Program Files`, or via **`-SevenZipPath`**. Version **26.0.0** was used during development.|
-| **OS** | Written using Windows 11 25H2. |
+| **7-Zip** | **Required if `-source` contains any `.zip` / `.7z` / `.rar`.** The script looks for `7z.exe` next to the script, under `Program Files`, or via **`-SevenZipPath`**. |
+| **OS** | Written using Windows 11. |
 
 ## Quick start
 
@@ -51,43 +51,49 @@ If you omit `-source` or `-dest`, the script **prompts** for each; pressing Ente
 ## Parameters and flags
 | Parameter / flag | Type | Description |
 |------------------|------|-------------|
-| `-source` | string | Root folder to **recursively** scan for disc images and archives. If omitted, you are prompted for a value. |
-| `-dest` | string | Folder where **`.chd` files will be written** (created if missing). Output CHDs always sit **at the top level of `-dest`**. |
-| `-SevenZipPath` | string | Optional path to **`7z.exe`** or its parent folder. Aliases: **`-Path7z`**, **`-zpath`**. |
+| `-source` | `string` | Root folder to **recursively** scan for disc images and archives. If omitted, you are prompted for a value (must already exist as a directory). |
+| `-dest` | `string` | Folder where **`.chd` files are written** (created if missing). Output CHDs always sit **at the top level of `-dest`**. Default when omitted or blank: **current directory**. |
+| `-SevenZipPath` | `string` | Optional path to **`7z.exe`** or its parent folder. Aliases: **`-Path7z`**, **`-zpath`**. |
 | `-yes` | switch | After a successful **create** and **verify**, **delete** sources: primary image, **`.cue`** referenced bins, **`.gdi`** referenced data files, **per-game folders** when safe, and—when applicable—the **archive file** and **unpack folder** behavior documented in **`-help`**. **Mutually exclusive** with `-no`. |
-| `-no` | switch | **Do not** delete original **loose** sources that live outside an archive unpack tree (default when neither flag is passed). **Unpack folders** for archives are still removed after a successful pass; **`-no`** keeps the **archive file** on disk. |
+| `-no` | switch | **Do not** delete original **loose** sources that live outside an archive unpack tree (default when neither `-yes` / `-no` is passed—behavior same as **`-no`**). **Unpack folders** for archives are still removed after a successful pass; **`-no`** keeps the **archive file** on disk. |
+| `-ignore` | switch | When the expected **`.chd`** already exists under **`-dest`**, **skip** that job (**no** `chdman verify` / recreate). For archives, the expected name is **`ArchiveBaseName.chd`** (e.g. `Game.7z` → `Game.chd`). **Not** valid with **`-yes`** (exit with error). Same effect as **[I] Ignore** at the interactive prompt when offered. |
 | `-nolog` | switch | **No log file** for a **fully successful** run. On the first conversion failure, a log may still be created with failure details. |
 | `-help` | switch | Show built-in help and exit. Also accepts `-?`, `--help`, `/help` as unbound arguments. |
 
 **Rules:**
-- When providing either the source or destination directory, you can press <ENTER> to use the current folder where `chdman` and `chd-maid` are located.
-- The parameters, `-yes` or `-no` are mutually exclusive. The script throws if both are set.
-- Regardless of using the `-yes-` or `-no` option, files that are extracted from compressed archives are deleted after the CHD file is verified.
-- If any error occurs during the creation of a `.chd` file, the error will be logged, even when the `-nolog` parameter is passed.
+- Use **only one** of `-yes` or `-no` (not both).
+- You cannot combine conflicting delete flags; the script throws if both are set.
+- **`-ignore`** cannot be used with **`-yes`**.
 
 ## Usage examples
 **Convert everything under the base directory, output to a folder, keep sources:**
 
 ```powershell
-.\chd-maid.ps1 -source "D:\Input\GDI" -dest "D:\Output\CHD" -no
+.\chd-maid.ps1 -source "D:\Dreamcast\GDI" -dest "D:\Dreamcast\CHD" -no
 ```
 
 **Same, but delete originals after success:**
 
 ```powershell
-.\chd-maid.ps1 -source "D:\Input\GDI" -dest "D:\Output\CHD" -yes
+.\chd-maid.ps1 -source "D:\Dreamcast\GDI" -dest "D:\Dreamcast\CHD" -yes
 ```
 
 **Point 7-Zip explicitly (folder or `7z.exe`):**
 
 ```powershell
-.\chd-maid.ps1 -source "D:\input" -dest "D:\output" -Path7z "D:\7-Zip" -no
+.\chd-maid.ps1 -source "D:\input" -dest "D:\output" -Path7z "C:\Program Files\7-Zip" -no
 ```
 
 **Successful run with no log file:**
 
 ```powershell
 .\chd-maid.ps1 -source "D:\input" -dest "D:\output" -no -nolog
+```
+
+**Skip jobs when the matching CHD already exists (keep all sources):**
+
+```powershell
+.\chd-maid.ps1 -source "D:\input" -dest "D:\output" -no -ignore
 ```
 
 **Interactive paths (prompted for source and/or destination):**
@@ -113,41 +119,44 @@ So everything lands **directly under `-dest`**, not in subfolders mirroring the 
 ## Expected behavior and output
 
 1. **Header** - Script title and version banner (e.g. `CHD-Maid`, dated version string).
-2. **Configuration** - Prints **Source**, **Destination**, and **Delete sources** (Yes/No).
-3. **Counts** - Compatible inputs found (disc images **plus** a nominal count per archive when present); number of existing `*.chd` files under **`-dest`** (recursive).
-4. **Log** - Path to a new log file: **`logs\log-chd-maid-YYYY-MM-dd-HHmmss.log`** (the **`logs`** folder is created if needed).
-   	- Omit with **`-nolog`** when the run ends fully successful.
-6. **Traversal** - Subdirectories are processed in full **before** archives and disc files at the same level, so nested layouts and archives beside cues are handled in a stable order.
-7. **Archives** - Each archive unpacks to **`-source\<archive name>\`** (with ` (2)`, ` (3)`, … if the name already exists). Nested archives inside that tree are expanded in turn.
-8. **Per disc input**  
-   	- If `SomeName.chd` **already exists**: runs **`chdman verify`** on it. 
-   	-- If verify succeeds, the file is **skipped** (sources untouched). 
-   	-- If verify fails, the CHD is **removed** and **recreated** from the source.  
-   	- Otherwise: **`chdman createcd`** then **`chdman verify`** on the new CHD. If verify fails after create, the bad output CHD is **removed**.  
-   	- Progress is shown as a **status line** (elapsed time, percentage from tool output where available, file name).
-9. **After an archive pass** - When all jobs under that unpack tree succeed, the **extracted folder** is removed **before** continuing to the next source item.
-	- **`-yes`** also removes the **archive file**, **`-no`** keeps it.
-11. **On success with `-yes`** - Deletes sources per rules above (cue bins, GDI data files, optional whole game folder cleanup).
-12. **Completion summary** provides:
-	- Elapsed time
+2. **Configuration** - Prints **Source**, **Destination**, **Delete sources**, and **Ignore sources** (whether **`-ignore`** / rescan mode is active). If you pass **neither** **`-yes`** nor **`-ignore`**, and **at least one** `.chd` already exists under **`-dest`**, the script may prompt **Ignore** vs **Rescan** (**I** / **R**; Enter = Rescan). There is **no** prompt when **`-dest`** has no CHDs yet.
+3. **Counts** - Compatible inputs found (disc images **plus** a nominal count per archive when present); number of existing `*.chd` files under **`-dest`** (recursive). The **`===[ current/total ]===`** total starts from this count and **can grow** if an archive yields more disc jobs than that initial number.
+4. **Log** - Path to a new log file: **`logs\log-chd-maid-YYYY-MM-dd-HHmmss.log`** (the **`logs`** folder is created if needed). Omit with **`-nolog`** when the run ends fully successful. The console summary lists the log path when a log exists (including an error-only log created under **`-nolog`** after a failure).
+5. **Traversal** - Subdirectories are processed in full **before** archives and disc files at the same level, so nested layouts and archives beside cues are handled in a stable order.
+6. **Archives** - Each archive unpacks to **`-source\<archive name>\`** (with ` (2)`, ` (3)`, … if the name already exists). Nested archives inside that tree are expanded in turn. With **`-ignore`**, an archive may be **skipped without extracting** when **`ArchiveBaseName.chd`** already exists under **`-dest`**.
+7. **Per disc input**  
+   - A **blank line** may appear before the next job when moving to a **different game folder** (not between multi-disc `.cue`/`.gdi` files in the **same** folder).  
+   - If **`-ignore`** and `SomeName.chd` **already exists** under **`-dest`**: job is **skipped** (logged as ignoring existing CHD).  
+   - Else if `SomeName.chd` **already exists**: runs **`chdman verify`** on it. 
+   -- If verify succeeds, the file is **skipped** (sources untouched). 
+   -- If verify fails, the CHD is **removed** and **recreated** from the source.  
+   - Otherwise: **`chdman createcd`** then **`chdman verify`** on the new CHD. If verify fails after create, the bad output CHD is **removed**.  
+   - Progress is shown as a **status line** (elapsed time, percentage from tool output where available, file name).
+8. **After an archive pass** - When all jobs under that unpack tree succeed, the **extracted folder** is removed **before** continuing to the next source item; **`-yes`** also removes the **archive file**, **`-no`** keeps it.
+9. **On success with `-yes`** - Deletes sources per rules above (cue bins, GDI data files, optional whole game folder cleanup).
+10. **Completion summary** provides:
+	- Elapsed time (includes **days** when the run is that long)
 	- Counts where non-zero:
 	-- CHDs created
-    -- CHDs skipped (valid)
-    -- CHDs failed during creation
+	-- CHDs recreated (bad CHD removed after failed verify, then a good one produced)
+	-- CHDs skipped (**verified existing**)
+	-- CHDs skipped (**`-ignore`**)
+	-- Archives skipped (**`-ignore`**)
+	-- CHDs failed during creation
 	-- Archives extracted (if any)
-	- Optional **size** lines: original material accounted for (archive **file sizes** plus loose-folder footprint), new CHD total this run, space saved (with an optional **%** on the New CHD line when attribution applies)
+	- Optional **size** lines: original material accounted for (archive **file sizes** plus loose-folder footprint), new CHD total this run, **space saved** vs that original basis with an optional **“% difference”** on the space-saved line
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | No failures (may have skips). Also used when **no** `.cue`/`.gdi`/`.iso` jobs complete (warning only). |
+| `0` | No failures (may have skips or **`-ignore`** skips). Also used when **no** `.cue`/`.gdi`/`.iso` jobs complete (warning only; ignored-only runs with inputs present still count as work). |
 | `1` | At least one failure, **or** PowerShell version too old, **or** missing **`chdman.exe` / `7z.exe`** when needed, **or** fatal script error. |
 
 ### Log file contents
 
 - Start command echo and discovery counts.
-- For each processed item: source path, and a line such as `VERIFIED`, `SKIPPED (already existed and valid)`, `FAILED`, or `REMOVED (failed verify)`.
+- For each processed item: a **block** of lines (not interleaved with live `chdman` output in the file) such as progress header, `VERIFIED`, `SKIPPED (already existed and valid)`, **`IGNORING`** (**`-ignore`**), `FAILED`, `REMOVED (failed verify)`, etc., plus relevant paths.
 - Final completion summary lines appended at the end when logging is enabled or any job failed.
 
 ## Troubleshooting
@@ -163,6 +172,6 @@ So everything lands **directly under `-dest`**, not in subfolders mirroring the 
 
 ## License
 
-This project is licensed under the **MIT License** — see the [`LICENSE`](LICENSE) file in the repository.
+This project is licensed under the **GNU General Public License v3.0** (**GPL-3.0**), consistent with the badge above. The full license text is at [https://www.gnu.org/licenses/gpl-3.0.html](https://www.gnu.org/licenses/gpl-3.0.html).
 
 *CHD-Maid is a convenience wrapper around `chdman`; comply with MAME/chdman licensing when you distribute or use their tools.*
